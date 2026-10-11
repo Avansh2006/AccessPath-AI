@@ -7,10 +7,43 @@ import 'package:access_map/shared/models/place_review.dart';
 import 'package:access_map/shared/models/travel_mode.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class SupabasePlaceRepository implements PlaceRepository {
+class SupabasePlaceRepository implements PlaceRepository, LivePlaceUpdates {
   SupabasePlaceRepository(this.client);
 
   final SupabaseClient client;
+
+  /// Listens to Postgres changes on `places` and `reviews`. Events only
+  /// arrive when both tables are in the `supabase_realtime` publication.
+  @override
+  Future<void> Function() subscribeToPlaceChanges({
+    required void Function() onChange,
+    required void Function(LiveUpdatesStatus status) onStatus,
+  }) {
+    onStatus(LiveUpdatesStatus.connecting);
+    final channel = client.channel('live-accessibility-map');
+    for (final table in const ['places', 'reviews']) {
+      channel.onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: table,
+        callback: (_) => onChange(),
+      );
+    }
+    channel.subscribe((status, _) {
+      switch (status) {
+        case RealtimeSubscribeStatus.subscribed:
+          onStatus(LiveUpdatesStatus.live);
+        case RealtimeSubscribeStatus.channelError:
+        case RealtimeSubscribeStatus.timedOut:
+          onStatus(LiveUpdatesStatus.error);
+        case RealtimeSubscribeStatus.closed:
+          break;
+      }
+    });
+    return () async {
+      await client.removeChannel(channel);
+    };
+  }
 
   @override
   Future<List<Place>> getNearbyPlaces(

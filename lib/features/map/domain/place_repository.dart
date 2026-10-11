@@ -20,3 +20,16 @@ abstract class PlaceRepository {
     double radiusKm = 0.15,
   });
 }
+
+enum LiveUpdatesStatus { unsupported, connecting, live, error }
+
+/// Optional capability for repositories that can push backend changes.
+/// Repositories without a realtime backend simply don't implement it.
+abstract interface class LivePlaceUpdates {
+  /// Calls [onChange] whenever places or reviews change on the backend.
+  /// Returns a callback that cancels the subscription.
+  Future<void> Function() subscribeToPlaceChanges({
+    required void Function() onChange,
+    required void Function(LiveUpdatesStatus status) onStatus,
+  });
+}

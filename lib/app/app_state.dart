@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:access_map/core/services/geocoding_service.dart';
 import 'package:access_map/core/services/navigation_service.dart';
 import 'package:access_map/core/services/voice_search_service.dart';
 import 'package:access_map/features/map/data/mock_place_repository.dart';
+import 'package:access_map/features/map/domain/live_map_explorer.dart';
 import 'package:access_map/features/summaries/domain/community_summary.dart';
 import 'package:access_map/shared/models/accessibility_feature.dart';
 import 'package:access_map/shared/models/accessibility_need.dart';
@@ -75,6 +78,145 @@ class AppState extends ChangeNotifier {
   double get mapLatitude => _mapLatitude;
   double get mapLongitude => _mapLongitude;
 
+  // --- Live Accessibility Explorer -------------------------------------
+  ExplorerRadius _explorerRadius = ExplorerRadius.fiveKm;
+  ExplorerCategory? _explorerCategory;
+  double? _userLatitude;
+  double? _userLongitude;
+  LocationLookupStatus? _locationStatus;
+  bool _isLocating = false;
+  LiveUpdatesStatus _liveUpdatesStatus = LiveUpdatesStatus.unsupported;
+  Future<void> Function()? _cancelLiveUpdates;
+  Timer? _liveRefreshDebounce;
+  bool _liveRefreshFailed = false;
+  DateTime? _lastLiveRefresh;
+
+  ExplorerRadius get explorerRadius => _explorerRadius;
+  ExplorerCategory? get explorerCategory => _explorerCategory;
+  double? get userLatitude => _userLatitude;
+  double? get userLongitude => _userLongitude;
+  bool get hasUserLocation => _userLatitude != null && _userLongitude != null;
+
+  /// Null until a lookup has been attempted.
+  LocationLookupStatus? get locationStatus => _locationStatus;
+  bool get isLocating => _isLocating;
+  LiveUpdatesStatus get liveUpdatesStatus => _liveUpdatesStatus;
+  bool get liveRefreshFailed => _liveRefreshFailed;
+  DateTime? get lastLiveRefresh => _lastLiveRefresh;
+
+  /// Accessibility criteria that matter for the current profile.
+  Set<AccessibilityCriterion> get relevantCriteria =>
+      const SuitabilityEvaluator().relevantCriteria(
+        _profile.accessibilityNeeds,
+        essentials: _essentialRequirements,
+      );
+
+  SuitabilityResult suitabilityFor(Place place) =>
+      const SuitabilityEvaluator().evaluate(place, relevantCriteria);
+
+  /// Places (or current search results) inside the selected radius and
+  /// category, nearest first.
+  List<Place> get explorerPlaces => rankForRequirements(
+    filterExplorerPlaces(
+      _visiblePlaces,
+      centerLatitude: _mapLatitude,
+      centerLongitude: _mapLongitude,
+      radius: _explorerRadius,
+      category: _explorerCategory,
+    ),
+  );
+
+  void setExplorerRadius(ExplorerRadius radius) {
+    _explorerRadius = radius;
+    notifyListeners();
+  }
+
+  void setExplorerCategory(ExplorerCategory? category) {
+    _explorerCategory = category;
+    notifyListeners();
+  }
+
+  /// Reads the device location and reloads nearby places around it.
+  Future<LocationLookupStatus> locateUser() async {
+    if (_isLocating) return _locationStatus ?? LocationLookupStatus.unavailable;
+    _isLocating = true;
+    notifyListeners();
+    final lookup = await _geocodingService.locate(resolveAddress: false);
+    _locationStatus = lookup.status;
+    _isLocating = false;
+    final selection = lookup.selection;
+    if (selection != null) {
+      _userLatitude = selection.latitude;
+      _userLongitude = selection.longitude;
+      _mapLatitude = selection.latitude;
+      _mapLongitude = selection.longitude;
+      await loadPlaces();
+    } else {
+      notifyListeners();
+    }
+    return lookup.status;
+  }
+
+  Future<bool> openLocationSettings() =>
+      _locationStatus == LocationLookupStatus.serviceDisabled
+      ? _geocodingService.openLocationSettings()
+      : _geocodingService.openAppSettings();
+
+  void _startLiveUpdates() {
+    final repository = _placeRepository;
+    if (_cancelLiveUpdates != null || repository is! LivePlaceUpdates) return;
+    final live = repository as LivePlaceUpdates;
+    try {
+      _cancelLiveUpdates = live.subscribeToPlaceChanges(
+        onChange: _scheduleLiveRefresh,
+        onStatus: (status) {
+          _liveUpdatesStatus = status;
+          notifyListeners();
+        },
+      );
+    } catch (_) {
+      _liveUpdatesStatus = LiveUpdatesStatus.error;
+    }
+  }
+
+  void _scheduleLiveRefresh() {
+    _liveRefreshDebounce?.cancel();
+    _liveRefreshDebounce = Timer(
+      const Duration(milliseconds: 600),
+      refreshFromBackend,
+    );
+  }
+
+  /// Re-fetches places without clearing the map; keeps the selection.
+  Future<void> refreshFromBackend() async {
+    try {
+      final refreshed = await _placeRepository.getNearbyPlaces(
+        _mapLatitude,
+        _mapLongitude,
+      );
+      _places = refreshed;
+      if (_searchQuery.trim().isEmpty) _visiblePlaces = refreshed;
+      final selectedId = _selectedPlace?.id;
+      if (selectedId != null) {
+        _selectedPlace = refreshed
+            .where((place) => place.id == selectedId)
+            .firstOrNull;
+      }
+      _liveRefreshFailed = false;
+      _lastLiveRefresh = DateTime.now();
+    } catch (_) {
+      _liveRefreshFailed = true;
+    }
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _liveRefreshDebounce?.cancel();
+    _cancelLiveUpdates?.call();
+    super.dispose();
+  }
+
   Future<void> loadPlaces() async {
     _isLoadingPlaces = true;
     _errorMessage = null;
@@ -86,6 +228,8 @@ class AppState extends ChangeNotifier {
       );
       _visiblePlaces = _places;
       _selectedPlace = _places.isNotEmpty ? _places.first : null;
+      _liveRefreshFailed = false;
+      _startLiveUpdates();
     } catch (_) {
       _errorMessage = "Couldn't load nearby places. Please try again.";
     } finally {
@@ -148,6 +292,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void clearSelectedPlace() {
+    _selectedPlace = null;
+    notifyListeners();
+  }
+
   void toggleEssentialRequirement(AccessibilityCriterion criterion) {
     if (!_essentialRequirements.add(criterion)) {
       _essentialRequirements.remove(criterion);
@@ -186,14 +335,8 @@ class AppState extends ChangeNotifier {
     return ranked;
   }
 
-  Future<bool> useCurrentLocation() async {
-    final position = await _geocodingService.currentPosition();
-    if (position == null) return false;
-    _mapLatitude = position.latitude;
-    _mapLongitude = position.longitude;
-    await loadPlaces();
-    return true;
-  }
+  Future<bool> useCurrentLocation() async =>
+      await locateUser() == LocationLookupStatus.found;
 
   void changeTab(int index) {
     _tabIndex = index;

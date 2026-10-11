@@ -14,6 +14,22 @@ class GeoSelection {
   });
 }
 
+enum LocationLookupStatus {
+  found,
+  denied,
+  deniedForever,
+  serviceDisabled,
+  unavailable,
+}
+
+/// Result of a device-location lookup; [selection] is set only when found.
+class LocationLookup {
+  const LocationLookup(this.status, [this.selection]);
+
+  final LocationLookupStatus status;
+  final GeoSelection? selection;
+}
+
 /// Resolves coordinates into addresses and reads the device location.
 ///
 /// The MVP uses geolocator's built-in reverse geocoding where available;
@@ -60,28 +76,60 @@ class GeocodingService {
 
   /// Current device position, asking for permission only when called.
   /// Returns null when permission is denied or location is unavailable.
-  Future<GeoSelection?> currentPosition() async {
+  Future<GeoSelection?> currentPosition() async =>
+      (await locate()).selection;
+
+  /// Like [currentPosition] but reports why a position could not be read.
+  /// Never throws.
+  Future<LocationLookup> locate({bool resolveAddress = true}) async {
     try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        return const LocationLookup(LocationLookupStatus.serviceDisabled);
+      }
       var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        return null;
+      if (permission == LocationPermission.deniedForever) {
+        return const LocationLookup(LocationLookupStatus.deniedForever);
+      }
+      if (permission == LocationPermission.denied) {
+        return const LocationLookup(LocationLookupStatus.denied);
       }
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
       );
-      final address = await reverseGeocode(position.latitude, position.longitude);
-      return GeoSelection(
-        latitude: position.latitude,
-        longitude: position.longitude,
-        address: address,
+      final address = resolveAddress
+          ? await reverseGeocode(position.latitude, position.longitude)
+          : _coordinateLabel(position.latitude, position.longitude);
+      return LocationLookup(
+        LocationLookupStatus.found,
+        GeoSelection(
+          latitude: position.latitude,
+          longitude: position.longitude,
+          address: address,
+        ),
       );
     } catch (_) {
-      return null;
+      return const LocationLookup(LocationLookupStatus.unavailable);
+    }
+  }
+
+  /// Opens the OS settings page for this app. Never throws.
+  Future<bool> openAppSettings() async {
+    try {
+      return await Geolocator.openAppSettings();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Opens the OS location settings. Never throws.
+  Future<bool> openLocationSettings() async {
+    try {
+      return await Geolocator.openLocationSettings();
+    } catch (_) {
+      return false;
     }
   }
 
