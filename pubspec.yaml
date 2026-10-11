@@ -1,0 +1,40 @@
+name: access_map
+description: "AccessPath AI by BIT for BYTE — community-powered accessibility discovery"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  provider: ^6.1.2
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  go_router: ^14.8.1
+  speech_to_text: ^7.0.0
+  shared_preferences: ^2.3.4
+  url_launcher: ^6.3.1
+  geolocator: ^13.0.2
+  geocoding: ^3.0.0
+  intl: ^0.20.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  image_path: "lib/icons/app_icon_round_1024.png"
+  android: "ic_launcher"
+  min_sdk_android: 21
+  adaptive_icon_background: "lib/icons/adaptive_bg.png"
+  adaptive_icon_foreground: "lib/icons/app_icon_round_1024.png"
+  ios: true
+  remove_alpha_ios: true
+
+flutter:
+  uses-material-design: true
