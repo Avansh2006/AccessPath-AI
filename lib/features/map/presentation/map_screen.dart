@@ -6,6 +6,7 @@ import 'package:access_map/features/contribute/presentation/add_location_screen.
 import 'package:access_map/features/places/presentation/place_details_screen.dart';
 import 'package:access_map/shared/models/place.dart';
 import 'package:access_map/shared/models/place_category.dart';
+import 'package:access_map/shared/models/accessibility_rating.dart';
 import 'package:access_map/shared/widgets/access_search_bar.dart';
 import 'package:access_map/shared/widgets/app_components.dart';
 import 'package:flutter/material.dart';
@@ -27,7 +28,9 @@ class _MapScreenState extends State<MapScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final places = _filteredPlaces(state.visiblePlaces);
+    final places = state.rankForRequirements(
+      _filteredPlaces(state.visiblePlaces),
+    );
     return SafeArea(
       child: Stack(
         children: [
@@ -35,8 +38,10 @@ class _MapScreenState extends State<MapScreen> {
             child: state.isLoadingPlaces
                 ? const Center(child: CircularProgressIndicator())
                 : _AccessibleMap(
+                    key: ValueKey('${state.mapLatitude},${state.mapLongitude}'),
                     places: places,
                     selectedPlace: state.selectedPlace,
+                    center: LatLng(state.mapLatitude, state.mapLongitude),
                   ),
           ),
           Positioned(
@@ -85,14 +90,19 @@ class _MapScreenState extends State<MapScreen> {
                 FloatingActionButton.small(
                   heroTag: 'location',
                   tooltip: 'Use current location',
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Demo mode is centered on Goa. Manual search still works without location.',
+                  onPressed: () async {
+                    final found = await context
+                        .read<AppState>()
+                        .useCurrentLocation();
+                    if (!found && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Location is unavailable or permission was denied.',
+                          ),
                         ),
-                      ),
-                    );
+                      );
+                    }
                   },
                   child: const Icon(Icons.my_location),
                 ),
@@ -191,6 +201,41 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: AppSpacing.md),
+                  const Text('Essential accessibility requirements'),
+                  const SizedBox(height: AppSpacing.sm),
+                  Wrap(
+                    spacing: AppSpacing.sm,
+                    runSpacing: AppSpacing.sm,
+                    children: AccessibilityCriterion.values.map((criterion) {
+                      final selected = context
+                          .read<AppState>()
+                          .essentialRequirements
+                          .contains(criterion);
+                      return FilterChip(
+                        label: Text(criterion.label),
+                        selected: selected,
+                        onSelected: (_) {
+                          context.read<AppState>().toggleEssentialRequirement(
+                            criterion,
+                          );
+                          setModalState(() {});
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: context.read<AppState>().verifiedEssentialsOnly,
+                    onChanged: (value) {
+                      context.read<AppState>().setVerifiedEssentialsOnly(value);
+                      setModalState(() {});
+                    },
+                    title: const Text('Verified matches only'),
+                    subtitle: const Text(
+                      'Unknown information is excluded, never assumed accessible.',
+                    ),
+                  ),
                 ],
               ),
             );
@@ -203,20 +248,20 @@ class _MapScreenState extends State<MapScreen> {
 
 class _AccessibleMap extends StatelessWidget {
   const _AccessibleMap({
+    super.key,
     required this.places,
     required this.selectedPlace,
+    required this.center,
   });
 
   final List<Place> places;
   final Place? selectedPlace;
+  final LatLng center;
 
   @override
   Widget build(BuildContext context) {
     return FlutterMap(
-      options: const MapOptions(
-        initialCenter: LatLng(15.4909, 73.8278),
-        initialZoom: 11,
-      ),
+      options: MapOptions(initialCenter: center, initialZoom: 11),
       children: [
         TileLayer(
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -306,8 +351,9 @@ class PlacePreviewSheet extends StatelessWidget {
                       ),
                       child: Text(
                         'New',
-                        style: AppTypography.labelMedium
-                            .copyWith(color: AppColors.primary),
+                        style: AppTypography.labelMedium.copyWith(
+                          color: AppColors.primary,
+                        ),
                       ),
                     )
                   else
@@ -373,11 +419,11 @@ class _SearchResults extends StatelessWidget {
           elevation: 4,
           clipBehavior: Clip.antiAlias,
           child: state.isSearching
-          ? const Padding(
-              padding: EdgeInsets.all(AppSpacing.lg),
-              child: LinearProgressIndicator(),
-            )
-          : places.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(AppSpacing.lg),
+                  child: LinearProgressIndicator(),
+                )
+              : places.isEmpty
               ? const Padding(
                   padding: EdgeInsets.all(AppSpacing.lg),
                   child: Text('No accessible places found.'),
@@ -392,13 +438,16 @@ class _SearchResults extends StatelessWidget {
                     return ListTile(
                       leading: Icon(place.category.icon),
                       title: Text(place.name),
-                      subtitle: Text('${place.category.displayName} - Friendly ${place.friendlyScore.toStringAsFixed(1)}'),
+                      subtitle: Text(
+                        '${place.category.displayName} - Friendly ${place.friendlyScore.toStringAsFixed(1)}',
+                      ),
                       onTap: () {
                         context.read<AppState>().selectPlace(place);
                         FocusScope.of(context).unfocus();
                         Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) => PlaceDetailsScreen(placeId: place.id),
+                            builder: (_) =>
+                                PlaceDetailsScreen(placeId: place.id),
                           ),
                         );
                       },

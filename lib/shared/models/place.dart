@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'accessibility_feature.dart';
 import 'accessibility_need.dart';
+import 'accessibility_rating.dart';
 import 'place_category.dart';
 import 'place_review.dart';
 import 'travel_mode.dart';
@@ -140,6 +141,11 @@ class Place {
   /// trustworthy scores (community submissions start here).
   bool get isNewCommunityPlace =>
       source == PlaceSource.community && totalReviews == 0;
+
+  AccessibilityScore get accessibilityScore =>
+      const AccessibilityScoreCalculator().calculate(
+        reviews.map((review) => review.accessibilityRatings),
+      );
 
   /// Features that are confirmed available.
   List<AccessibilityFeature> get availableFeatures => accessibilityFeatures
@@ -385,6 +391,9 @@ class Place {
         'needs': r.reviewerContext.accessibilityNeeds.map((n) => n.name).toList(),
         'helpfulVotes': r.helpfulVotes,
         'reported': r.reported,
+        'accessibilityRatings': r.accessibilityRatings.map(
+          (criterion, rating) => MapEntry(criterion.name, rating.toJson()),
+        ),
       };
 
   static PlaceReview reviewFromJson(Map<String, dynamic> json) {
@@ -417,6 +426,13 @@ class Place {
       ),
       helpfulVotes: json['helpfulVotes'] as int? ?? 0,
       reported: json['reported'] as bool? ?? false,
+      accessibilityRatings:
+          (json['accessibilityRatings'] as Map<String, dynamic>? ?? {}).map(
+        (key, value) => MapEntry(
+          AccessibilityCriterion.values.firstWhere((item) => item.name == key),
+          AccessibilityRating.fromJson(value as Map<String, dynamic>),
+        ),
+      ),
     );
   }
 }

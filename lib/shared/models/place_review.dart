@@ -1,4 +1,5 @@
 import 'accessibility_need.dart';
+import 'accessibility_rating.dart';
 import 'travel_mode.dart';
 
 /// Context about the reviewer for a particular review.
@@ -49,6 +50,7 @@ class PlaceReview {
   final int helpfulVotes;
   final bool reported;
   final List<String> photoUrls;
+  final Map<AccessibilityCriterion, AccessibilityRating> accessibilityRatings;
 
   const PlaceReview({
     required this.id,
@@ -67,12 +69,10 @@ class PlaceReview {
     this.helpfulVotes = 0,
     this.reported = false,
     this.photoUrls = const [],
+    this.accessibilityRatings = const {},
   });
 
-  PlaceReview copyWith({
-    int? helpfulVotes,
-    bool? reported,
-  }) {
+  PlaceReview copyWith({int? helpfulVotes, bool? reported}) {
     return PlaceReview(
       id: id,
       placeId: placeId,
@@ -90,6 +90,7 @@ class PlaceReview {
       helpfulVotes: helpfulVotes ?? this.helpfulVotes,
       reported: reported ?? this.reported,
       photoUrls: photoUrls,
+      accessibilityRatings: accessibilityRatings,
     );
   }
 }

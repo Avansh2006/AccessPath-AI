@@ -2,8 +2,10 @@ import 'package:access_map/core/services/geocoding_service.dart';
 import 'package:access_map/core/services/navigation_service.dart';
 import 'package:access_map/core/services/voice_search_service.dart';
 import 'package:access_map/features/map/data/mock_place_repository.dart';
+import 'package:access_map/features/summaries/domain/community_summary.dart';
 import 'package:access_map/shared/models/accessibility_feature.dart';
 import 'package:access_map/shared/models/accessibility_need.dart';
+import 'package:access_map/shared/models/accessibility_rating.dart';
 import 'package:access_map/shared/models/place.dart';
 import 'package:access_map/shared/models/place_review.dart';
 import 'package:access_map/shared/models/travel_mode.dart';
@@ -16,18 +18,25 @@ class AppState extends ChangeNotifier {
     VoiceSearchService? voiceSearchService,
     NavigationService? navigationService,
     GeocodingService? geocodingService,
-  })  : _placeRepository = placeRepository ?? MockPlaceRepository(),
-        _voiceSearchService = voiceSearchService ?? SpeechToTextService(),
-        _navigationService = navigationService ?? NavigationService(),
-        _geocodingService = geocodingService ?? const GeocodingService();
+    CommunitySummaryService? communitySummaryService,
+  }) : _placeRepository = placeRepository ?? MockPlaceRepository(),
+       _voiceSearchService = voiceSearchService ?? SpeechToTextService(),
+       _navigationService = navigationService ?? NavigationService(),
+       _geocodingService = geocodingService ?? const GeocodingService(),
+       _communitySummaryService =
+           communitySummaryService ??
+           const UnconfiguredCommunitySummaryService();
 
   final PlaceRepository _placeRepository;
   final VoiceSearchService _voiceSearchService;
   final NavigationService _navigationService;
   final GeocodingService _geocodingService;
+  final CommunitySummaryService _communitySummaryService;
 
   GeocodingService get geocodingService => _geocodingService;
   PlaceRepository get placeRepository => _placeRepository;
+  Future<CommunitySummary> communitySummary(String placeId) =>
+      _communitySummaryService.forPlace(placeId);
 
   UserProfile _profile = UserProfile.mockUser().copyWith(
     onboardingComplete: false,
@@ -44,6 +53,10 @@ class AppState extends ChangeNotifier {
   int _tabIndex = 0;
   final Set<String> _reportedPlaceIds = {};
   final Map<String, String> _lastReportReasons = {};
+  final Set<AccessibilityCriterion> _essentialRequirements = {};
+  bool _verifiedEssentialsOnly = false;
+  double _mapLatitude = 15.4909;
+  double _mapLongitude = 73.8278;
 
   UserProfile get profile => _profile;
   List<Place> get places => _places;
@@ -56,13 +69,21 @@ class AppState extends ChangeNotifier {
   bool get hasSelectedTravelMode => _hasSelectedTravelMode;
   String? get errorMessage => _errorMessage;
   int get tabIndex => _tabIndex;
+  Set<AccessibilityCriterion> get essentialRequirements =>
+      Set.unmodifiable(_essentialRequirements);
+  bool get verifiedEssentialsOnly => _verifiedEssentialsOnly;
+  double get mapLatitude => _mapLatitude;
+  double get mapLongitude => _mapLongitude;
 
   Future<void> loadPlaces() async {
     _isLoadingPlaces = true;
     _errorMessage = null;
     notifyListeners();
     try {
-      _places = await _placeRepository.getNearbyPlaces(15.4909, 73.8278);
+      _places = await _placeRepository.getNearbyPlaces(
+        _mapLatitude,
+        _mapLongitude,
+      );
       _visiblePlaces = _places;
       _selectedPlace = _places.isNotEmpty ? _places.first : null;
     } catch (_) {
@@ -127,6 +148,53 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void toggleEssentialRequirement(AccessibilityCriterion criterion) {
+    if (!_essentialRequirements.add(criterion)) {
+      _essentialRequirements.remove(criterion);
+    }
+    notifyListeners();
+  }
+
+  void setVerifiedEssentialsOnly(bool value) {
+    _verifiedEssentialsOnly = value;
+    notifyListeners();
+  }
+
+  List<Place> rankForRequirements(Iterable<Place> places) {
+    final ranked = places.where((place) {
+      if (!_verifiedEssentialsOnly || _essentialRequirements.isEmpty) {
+        return true;
+      }
+      return _essentialRequirements.every(
+        (criterion) =>
+            place.accessibilityScore.evidenceFor(criterion) ==
+            RequirementEvidence.verified,
+      );
+    }).toList();
+    if (_essentialRequirements.isEmpty) return ranked;
+    int rank(Place place) => _essentialRequirements.fold(0, (total, criterion) {
+      final score = place.accessibilityScore.categoryScores[criterion];
+      return total +
+          switch (place.accessibilityScore.evidenceFor(criterion)) {
+            RequirementEvidence.verified => (score ?? 0).round(),
+            RequirementEvidence.unverified => -100,
+            RequirementEvidence.notApplicable => -150,
+            RequirementEvidence.unavailable => -200,
+          };
+    });
+    ranked.sort((a, b) => rank(b).compareTo(rank(a)));
+    return ranked;
+  }
+
+  Future<bool> useCurrentLocation() async {
+    final position = await _geocodingService.currentPosition();
+    if (position == null) return false;
+    _mapLatitude = position.latitude;
+    _mapLongitude = position.longitude;
+    await loadPlaces();
+    return true;
+  }
+
   void changeTab(int index) {
     _tabIndex = index;
     notifyListeners();
@@ -152,31 +220,34 @@ class AppState extends ChangeNotifier {
 
   Future<void> addReview({
     required Place place,
-    required double overall,
-    required double staff,
-    required double communication,
-    required double assistance,
-    required double physical,
-    required double facilities,
+    required Map<AccessibilityCriterion, AccessibilityRating> ratings,
     required String comment,
   }) async {
+    final score = const AccessibilityScoreCalculator().calculate([ratings]);
+    final overall = (score.overall ?? 0) / 10;
     final review = PlaceReview(
       id: 'review-${DateTime.now().microsecondsSinceEpoch}',
       placeId: place.id,
       userId: _profile.id,
       userName: _profile.displayName,
       overallRating: overall,
-      staffInteractionRating: staff,
-      communicationRating: communication,
-      assistanceRating: assistance,
-      physicalAccessibilityRating: physical,
-      facilitiesRating: facilities,
+      physicalAccessibilityRating:
+          score.categoryScores[AccessibilityCriterion.stepFreeAccess] == null
+          ? null
+          : score.categoryScores[AccessibilityCriterion.stepFreeAccess]! / 10,
+      facilitiesRating:
+          score.categoryScores[AccessibilityCriterion.accessibleWashrooms] ==
+              null
+          ? null
+          : score.categoryScores[AccessibilityCriterion.accessibleWashrooms]! /
+                10,
       comment: comment,
       createdAt: DateTime.now(),
       reviewerContext: AccessibilityContext(
         travelMode: _profile.travelMode,
         accessibilityNeeds: _profile.accessibilityNeeds,
       ),
+      accessibilityRatings: ratings,
     );
     await _placeRepository.addReview(place.id, review);
     await _refreshPlaces(selectPlaceId: place.id);
@@ -201,9 +272,11 @@ class AppState extends ChangeNotifier {
 
   void markReviewHelpful(Place place, PlaceReview review) {
     final updatedReviews = place.reviews
-        .map((item) => item.id == review.id
-            ? item.copyWith(helpfulVotes: item.helpfulVotes + 1)
-            : item)
+        .map(
+          (item) => item.id == review.id
+              ? item.copyWith(helpfulVotes: item.helpfulVotes + 1)
+              : item,
+        )
         .toList();
     _replacePlace(place.copyWith(reviews: updatedReviews));
     final contribution = CommunityContribution(
@@ -225,8 +298,9 @@ class AppState extends ChangeNotifier {
 
   void reportReview(Place place, PlaceReview review) {
     final updatedReviews = place.reviews
-        .map((item) =>
-            item.id == review.id ? item.copyWith(reported: true) : item)
+        .map(
+          (item) => item.id == review.id ? item.copyWith(reported: true) : item,
+        )
         .toList();
     _replacePlace(place.copyWith(reviews: updatedReviews));
     notifyListeners();
@@ -235,13 +309,15 @@ class AppState extends ChangeNotifier {
   /// Confirms an accessibility feature at a place and rewards community points.
   void confirmFeature(Place place, AccessibilityFeature feature) {
     final updatedFeatures = place.accessibilityFeatures
-        .map((item) => item.id == feature.id
-            ? item.copyWith(
-                status: FeatureStatus.available,
-                confirmationCount: item.confirmationCount + 1,
-                lastConfirmed: DateTime.now(),
-              )
-            : item)
+        .map(
+          (item) => item.id == feature.id
+              ? item.copyWith(
+                  status: FeatureStatus.available,
+                  confirmationCount: item.confirmationCount + 1,
+                  lastConfirmed: DateTime.now(),
+                )
+              : item,
+        )
         .toList();
     _replacePlace(place.copyWith(accessibilityFeatures: updatedFeatures));
     final contribution = CommunityContribution(
@@ -276,14 +352,19 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _refreshPlaces({String? selectPlaceId}) async {
-    final refreshed = await _placeRepository.getNearbyPlaces(15.4909, 73.8278);
+    final refreshed = await _placeRepository.getNearbyPlaces(
+      _mapLatitude,
+      _mapLongitude,
+    );
     _places = refreshed;
     _visiblePlaces = _searchQuery.trim().isEmpty
         ? refreshed
         : await _placeRepository.searchPlaces(_searchQuery);
     if (selectPlaceId != null) {
-      _selectedPlace =
-          refreshed.firstWhere((p) => p.id == selectPlaceId, orElse: () => refreshed.first);
+      _selectedPlace = refreshed.firstWhere(
+        (p) => p.id == selectPlaceId,
+        orElse: () => refreshed.first,
+      );
     }
     notifyListeners();
   }
@@ -304,13 +385,18 @@ class AppState extends ChangeNotifier {
     final friendly = avg((r) => r.overallRating);
     final updated = place.copyWith(
       friendlyScore: double.parse(friendly.toStringAsFixed(1)),
-      wheelchairScore: double.parse(avg((r) => r.physicalAccessibilityRating).toStringAsFixed(1)),
-      visualAccessibilityScore:
-          double.parse(avg((r) => r.physicalAccessibilityRating).toStringAsFixed(1)),
-      hearingAccessibilityScore:
-          double.parse(avg((r) => r.communicationRating).toStringAsFixed(1)),
-      communicationScore:
-          double.parse(avg((r) => r.communicationRating).toStringAsFixed(1)),
+      wheelchairScore: double.parse(
+        avg((r) => r.physicalAccessibilityRating).toStringAsFixed(1),
+      ),
+      visualAccessibilityScore: double.parse(
+        avg((r) => r.physicalAccessibilityRating).toStringAsFixed(1),
+      ),
+      hearingAccessibilityScore: double.parse(
+        avg((r) => r.communicationRating).toStringAsFixed(1),
+      ),
+      communicationScore: double.parse(
+        avg((r) => r.communicationRating).toStringAsFixed(1),
+      ),
     );
     _replacePlace(updated);
     notifyListeners();

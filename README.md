@@ -2,21 +2,22 @@
 
 Community-powered accessibility information for public places, built by **BIT for BYTE**.
 
-AccessPath AI helps people discover places, understand accessibility conditions before travelling, and contribute structured community feedback. The current foundation uses OpenStreetMap and local demo data while the persistent backend and grounded AI-summary service are planned.
+AccessPath AI helps people discover places, understand accessibility conditions before travelling, and contribute structured community feedback. It supports local demo mode plus an optional Supabase community backend and grounded Gemini summaries.
 
 ## Current capabilities
 
 - Interactive OpenStreetMap with category and accessibility filters.
 - Location search, current-location support, voice search, and external directions.
 - Profile-aware accessibility and wheelchair-friendly scores with score breakdowns.
-- Structured community reviews and accessibility feature confirmations.
+- Structured 0–5 reviews for step-free access, lifts, accessible washrooms, seating, and wayfinding, with Unknown and N/A.
+- Transparent weighted 0–100 scoring and essential-requirement filtering.
 - Five-step place submission flow with duplicate checking and a map picker.
 - Community contribution points, recent activity, and provisional place status.
-- Local persistence for user-added places through `SharedPreferences`.
+- Local demo persistence plus optional cross-user Supabase storage with RLS.
 
 ## Important data status
 
-The bundled venues, reviews, users, scores, and confirmations are demonstration data from `MockPlaceRepository`. They are not live community records. Authentication, cloud sync, photo upload, and AI-generated review summaries are not implemented yet.
+The bundled venues and reviews are labelled demonstration data. Live cross-user reviews and AI summaries require the setup in `supabase/README.md`; the app never simulates AI output when credentials or feedback are missing.
 
 ## Technology
 
@@ -63,17 +64,17 @@ flutter test
 flutter build apk --debug
 ```
 
-The app currently needs no secrets. If backend services are added, copy `.env.example` to a local ignored environment file and never commit credentials. Client apps must use only public client keys; Gemini or other privileged AI credentials must remain behind a server-side function.
+Local demo mode needs no secrets. For live community data, apply the migration and Edge Function described in `supabase/README.md`, then pass `SUPABASE_URL` and the public `SUPABASE_ANON_KEY` with `--dart-define`. Store `GEMINI_API_KEY` only as an Edge Function secret; never embed privileged credentials in the client.
 
 ## Git workflow
 
 - `main`: stable release
 - `dev`: integration
 - `feat/project-foundation`: foundation and rebrand work
+- `feat/ps-completion`: problem-statement completion work
 
 Open a pull request from the feature branch into `dev` after review. Do not merge foundation work directly into `main`.
 
 ## Branding and provenance
 
 **AccessPath AI** and **BIT for BYTE** are the current product and team branding. This repository retains source history and required notices. See [NOTICE.md](NOTICE.md) before redistributing the code.
-

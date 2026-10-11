@@ -2,7 +2,9 @@ import 'package:access_map/app/app_state.dart';
 import 'package:access_map/core/theme/app_theme.dart';
 import 'package:access_map/core/utils/accessibility_visibility_policy.dart';
 import 'package:access_map/features/reviews/presentation/write_review_screen.dart';
+import 'package:access_map/features/summaries/domain/community_summary.dart';
 import 'package:access_map/shared/models/accessibility_feature.dart';
+import 'package:access_map/shared/models/accessibility_rating.dart';
 import 'package:access_map/shared/models/place.dart';
 import 'package:access_map/shared/models/place_review.dart';
 import 'package:access_map/shared/models/user_profile.dart';
@@ -61,10 +63,14 @@ class PlaceDetailsScreen extends StatelessWidget {
             label: 'Get Directions',
             icon: Icons.directions,
             onPressed: () async {
-              final opened = await context.read<AppState>().openDirections(place);
+              final opened = await context.read<AppState>().openDirections(
+                place,
+              );
               if (!opened && context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Directions are unavailable on this device.')),
+                  const SnackBar(
+                    content: Text('Directions are unavailable on this device.'),
+                  ),
                 );
               }
             },
@@ -74,14 +80,14 @@ class PlaceDetailsScreen extends StatelessWidget {
             _ProvisionalScoresPanel(policy: policy, profile: profile)
           else ...[
             _ExplainableScore(
-            label: 'Friendly Score',
-            score: place.friendlyScore,
-            icon: Icons.star,
-            prominent: true,
-            explanation: _friendlyScoreExplanation(place),
-          ),
+              label: 'Friendly Score',
+              score: place.friendlyScore,
+              icon: Icons.star,
+              prominent: true,
+              explanation: _friendlyScoreExplanation(place),
+            ),
             const SizedBox(height: AppSpacing.md),
-          if (policy.showWheelchairScore(profile)) ...[
+            if (policy.showWheelchairScore(profile)) ...[
               _ExplainableScore(
                 label: 'Wheelchair-Friendly',
                 score: place.wheelchairScore,
@@ -121,16 +127,17 @@ class PlaceDetailsScreen extends StatelessWidget {
           ],
           if (personalizedFeatures.isNotEmpty) ...[
             const SectionHeader('Why this may work for you'),
-            ...personalizedFeatures.take(4).map(
-                  (feature) => _ConfirmationRow(feature: feature),
-                ),
+            ...personalizedFeatures
+                .take(4)
+                .map((feature) => _ConfirmationRow(feature: feature)),
           ],
           const SectionHeader('Accessibility features'),
           ...place.accessibilityFeatures.map(
             (feature) => _ConfirmableFeatureRow(
               feature: feature,
               onConfirm: feature.status == FeatureStatus.available
-                  ? () => context.read<AppState>().confirmFeature(place, feature)
+                  ? () =>
+                        context.read<AppState>().confirmFeature(place, feature)
                   : null,
             ),
           ),
@@ -153,10 +160,37 @@ class PlaceDetailsScreen extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: AppSpacing.md),
               child: ReviewCard(
                 review: review,
-                onHelpful: () => context.read<AppState>().markReviewHelpful(place, review),
+                onHelpful: () =>
+                    context.read<AppState>().markReviewHelpful(place, review),
                 onReport: () => _showReportSheet(context, place, review),
               ),
             ),
+          ),
+          const SectionHeader('Structured accessibility score'),
+          _StructuredAccessibilityPanel(
+            score: place.accessibilityScore,
+            essentials: state.essentialRequirements,
+          ),
+          const SectionHeader('AI community summary'),
+          FutureBuilder<CommunitySummary>(
+            future: state.communitySummary(place.id),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const LinearProgressIndicator();
+              }
+              final summary = snapshot.data!;
+              return Card(
+                child: ListTile(
+                  leading: const Icon(Icons.auto_awesome_outlined),
+                  title: Text(summary.message),
+                  subtitle: Text(
+                    summary.status == CommunitySummaryStatus.available
+                        ? 'Generated from ${summary.reviewCount} stored community reviews.'
+                        : 'No AI claims are shown without sufficient stored feedback.',
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -190,8 +224,10 @@ class PlaceDetailsScreen extends StatelessWidget {
           shrinkWrap: true,
           padding: const EdgeInsets.all(AppSpacing.lg),
           children: [
-            const Text('Report accessibility information',
-                style: AppTypography.headlineSmall),
+            const Text(
+              'Report accessibility information',
+              style: AppTypography.headlineSmall,
+            ),
             const SizedBox(height: AppSpacing.sm),
             Text(
               'Help the community keep information accurate.',
@@ -219,8 +255,10 @@ class PlaceDetailsScreen extends StatelessWidget {
                     context.read<AppState>().reportPlaceInfo(place, reason);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                          content:
-                              Text('Reported: $reason. Thank you for helping.')),
+                        content: Text(
+                          'Reported: $reason. Thank you for helping.',
+                        ),
+                      ),
                     );
                   },
                 ),
@@ -236,7 +274,13 @@ class PlaceDetailsScreen extends StatelessWidget {
       context: context,
       showDragHandle: true,
       builder: (context) {
-        final reasons = ['Inaccurate', 'Offensive', 'Spam', 'Irrelevant', 'Review bombing'];
+        final reasons = [
+          'Inaccurate',
+          'Offensive',
+          'Spam',
+          'Irrelevant',
+          'Review bombing',
+        ];
         return ListView(
           shrinkWrap: true,
           padding: const EdgeInsets.all(AppSpacing.lg),
@@ -258,6 +302,74 @@ class PlaceDetailsScreen extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _StructuredAccessibilityPanel extends StatelessWidget {
+  const _StructuredAccessibilityPanel({
+    required this.score,
+    required this.essentials,
+  });
+
+  final AccessibilityScore score;
+  final Set<AccessibilityCriterion> essentials;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              score.overall == null
+                  ? 'Insufficient structured feedback'
+                  : '${score.overall!.round()} / 100 overall',
+              style: AppTypography.headlineSmall,
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Weighted from community ratings: step-free 30%, lifts 20%, '
+              'washrooms 20%, seating 15%, wayfinding 15%. N/A categories '
+              'are excluded and weights are normalized.',
+              style: AppTypography.bodySmall,
+            ),
+            const Divider(height: AppSpacing.xl),
+            ...AccessibilityCriterion.values.map((criterion) {
+              final categoryScore = score.categoryScores[criterion];
+              final evidence = score.evidenceFor(criterion);
+              final detail = switch (evidence) {
+                RequirementEvidence.verified =>
+                  '${categoryScore!.round()} / 100 · verified',
+                RequirementEvidence.unavailable =>
+                  '${categoryScore!.round()} / 100 · does not meet essential threshold',
+                RequirementEvidence.notApplicable =>
+                  'Not applicable · not confirmed accessible',
+                RequirementEvidence.unverified =>
+                  'Missing or unknown information',
+              };
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  evidence == RequirementEvidence.verified
+                      ? Icons.verified_outlined
+                      : evidence == RequirementEvidence.unavailable
+                      ? Icons.block_outlined
+                      : Icons.help_outline,
+                ),
+                title: Text(criterion.label),
+                subtitle: Text(detail),
+                trailing: essentials.contains(criterion)
+                    ? const Chip(label: Text('Essential'))
+                    : null,
+              );
+            }),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -293,7 +405,10 @@ class _HeroPanel extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(place.name, style: AppTypography.headlineLarge),
-                    Text(place.category.displayName, style: AppTypography.bodySmall),
+                    Text(
+                      place.category.displayName,
+                      style: AppTypography.bodySmall,
+                    ),
                   ],
                 ),
               ),
@@ -303,8 +418,10 @@ class _HeroPanel extends StatelessWidget {
           Text(place.description, style: AppTypography.bodyMedium),
           const SizedBox(height: AppSpacing.lg),
           _InfoLine(icon: Icons.place_outlined, text: place.address),
-          if (place.phone != null) _InfoLine(icon: Icons.phone_outlined, text: place.phone!),
-          if (place.website != null) _InfoLine(icon: Icons.language, text: place.website!),
+          if (place.phone != null)
+            _InfoLine(icon: Icons.phone_outlined, text: place.phone!),
+          if (place.website != null)
+            _InfoLine(icon: Icons.language, text: place.website!),
           if (place.photos.isNotEmpty) ...[
             const SizedBox(height: AppSpacing.lg),
             _PhotoStrip(photos: place.photos),
@@ -358,10 +475,7 @@ class _CommunityAttributionBanner extends StatelessWidget {
 /// Provisional score state for places with no community ratings yet
 /// (#40, #41) — honest labels instead of fake numbers.
 class _ProvisionalScoresPanel extends StatelessWidget {
-  const _ProvisionalScoresPanel({
-    required this.policy,
-    required this.profile,
-  });
+  const _ProvisionalScoresPanel({required this.policy, required this.profile});
 
   final AccessibilityVisibilityPolicy policy;
   final UserProfile profile;
@@ -444,8 +558,11 @@ class _PhotoStrip extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.image_outlined,
-                        color: AppColors.primary, size: 28),
+                    const Icon(
+                      Icons.image_outlined,
+                      color: AppColors.primary,
+                      size: 28,
+                    ),
                     const SizedBox(height: AppSpacing.xs),
                     Text(
                       photo.caption?.isNotEmpty == true
@@ -502,7 +619,9 @@ class _ConfirmationRow extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       leading: const Icon(Icons.check_circle, color: AppColors.success),
       title: Text(feature.name),
-      subtitle: Text('Confirmed by ${feature.confirmationCount} users - $lastConfirmed'),
+      subtitle: Text(
+        'Confirmed by ${feature.confirmationCount} users - $lastConfirmed',
+      ),
     );
   }
 }
@@ -605,22 +724,21 @@ class _ConfirmableFeatureRow extends StatelessWidget {
         : DateFormat.yMMMd().format(feature.lastConfirmed!);
     final subtitle = feature.status == FeatureStatus.available
         ? 'Confirmed by ${feature.confirmationCount} users'
-            '${lastConfirmed != null ? ' - last $lastConfirmed' : ''}'
+              '${lastConfirmed != null ? ' - last $lastConfirmed' : ''}'
         : feature.status == FeatureStatus.unavailable
-            ? 'Reported not available here'
-            : 'Not yet verified by the community';
+        ? 'Reported not available here'
+        : 'Not yet verified by the community';
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      leading: Text(statusSymbol,
-          style: AppTypography.titleLarge.copyWith(color: statusColor)),
+      leading: Text(
+        statusSymbol,
+        style: AppTypography.titleLarge.copyWith(color: statusColor),
+      ),
       title: Text(feature.name, style: AppTypography.titleMedium),
       subtitle: Text(subtitle, style: AppTypography.bodySmall),
       trailing: onConfirm == null
           ? null
-          : TextButton(
-              onPressed: onConfirm,
-              child: const Text('Confirm'),
-            ),
+          : TextButton(onPressed: onConfirm, child: const Text('Confirm')),
     );
   }
 }

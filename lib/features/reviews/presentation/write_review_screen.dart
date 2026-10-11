@@ -1,5 +1,6 @@
 import 'package:access_map/app/app_state.dart';
 import 'package:access_map/core/theme/app_theme.dart';
+import 'package:access_map/shared/models/accessibility_rating.dart';
 import 'package:access_map/shared/models/place.dart';
 import 'package:access_map/shared/widgets/app_components.dart';
 import 'package:flutter/material.dart';
@@ -16,12 +17,10 @@ class WriteReviewScreen extends StatefulWidget {
 
 class _WriteReviewScreenState extends State<WriteReviewScreen> {
   final _commentController = TextEditingController();
-  double _overall = 8;
-  double _staff = 8;
-  double _communication = 8;
-  double _assistance = 8;
-  double _physical = 8;
-  double _facilities = 8;
+  final Map<AccessibilityCriterion, AccessibilityRating> _ratings = {
+    for (final criterion in AccessibilityCriterion.values)
+      criterion: AccessibilityRating.rated(3),
+  };
   bool _submitting = false;
 
   @override
@@ -32,7 +31,13 @@ class _WriteReviewScreenState extends State<WriteReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final canSubmit = _commentController.text.trim().length >= 12 && !_submitting;
+    final hasAnswered = _ratings.values.any(
+      (rating) => rating.status != AccessibilityRatingStatus.unknown,
+    );
+    final canSubmit =
+        hasAnswered &&
+        _commentController.text.trim().length >= 12 &&
+        !_submitting;
     return Scaffold(
       appBar: AppBar(title: const Text('Write a Review')),
       body: ListView(
@@ -42,16 +47,20 @@ class _WriteReviewScreenState extends State<WriteReviewScreen> {
           Text(widget.place.name, style: AppTypography.headlineLarge),
           const SizedBox(height: AppSpacing.sm),
           Text(
-            'Rate the visit from your accessibility context.',
-            style: AppTypography.bodyMedium.copyWith(color: AppColors.textSecondary),
+            'Rate only what you observed. Unknown is never counted as accessible.',
+            style: AppTypography.bodyMedium.copyWith(
+              color: AppColors.textSecondary,
+            ),
           ),
-          const SectionHeader('Accessibility ratings'),
-          _RatingSlider(label: 'Overall experience', value: _overall, onChanged: (v) => setState(() => _overall = v)),
-          _RatingSlider(label: 'Staff interaction', value: _staff, onChanged: (v) => setState(() => _staff = v)),
-          _RatingSlider(label: 'Communication', value: _communication, onChanged: (v) => setState(() => _communication = v)),
-          _RatingSlider(label: 'Assistance', value: _assistance, onChanged: (v) => setState(() => _assistance = v)),
-          _RatingSlider(label: 'Physical accessibility', value: _physical, onChanged: (v) => setState(() => _physical = v)),
-          _RatingSlider(label: 'Facilities available', value: _facilities, onChanged: (v) => setState(() => _facilities = v)),
+          const SectionHeader('Accessibility ratings (0–5)'),
+          ...AccessibilityCriterion.values.map(
+            (criterion) => _CriterionRating(
+              criterion: criterion,
+              rating: _ratings[criterion]!,
+              onChanged: (rating) =>
+                  setState(() => _ratings[criterion] = rating),
+            ),
+          ),
           const SectionHeader('Tell the community'),
           TextField(
             controller: _commentController,
@@ -61,16 +70,6 @@ class _WriteReviewScreenState extends State<WriteReviewScreen> {
             decoration: const InputDecoration(
               hintText: 'What should someone with similar needs expect here?',
             ),
-          ),
-          const SizedBox(height: AppSpacing.xl),
-          OutlinedButton.icon(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Photo uploads are prepared for a future backend.')),
-              );
-            },
-            icon: const Icon(Icons.add_a_photo_outlined),
-            label: const Text('Add Photo'),
           ),
           const SizedBox(height: AppSpacing.xl),
           PrimaryButton(
@@ -85,58 +84,102 @@ class _WriteReviewScreenState extends State<WriteReviewScreen> {
 
   Future<void> _submit() async {
     setState(() => _submitting = true);
-    await context.read<AppState>().addReview(
-          place: widget.place,
-          overall: _overall,
-          staff: _staff,
-          communication: _communication,
-          assistance: _assistance,
-          physical: _physical,
-          facilities: _facilities,
-          comment: _commentController.text.trim(),
-        );
-    if (!mounted) return;
-    setState(() => _submitting = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('+5 Community Points for your review.')),
-    );
-    Navigator.of(context).pop();
+    try {
+      await context.read<AppState>().addReview(
+        place: widget.place,
+        ratings: Map.unmodifiable(_ratings),
+        comment: _commentController.text.trim(),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('+5 Community Points for your review.')),
+      );
+      Navigator.of(context).pop();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Review could not be saved. Please try again.'),
+        ),
+      );
+    }
   }
 }
 
-class _RatingSlider extends StatelessWidget {
-  const _RatingSlider({
-    required this.label,
-    required this.value,
+class _CriterionRating extends StatelessWidget {
+  const _CriterionRating({
+    required this.criterion,
+    required this.rating,
     required this.onChanged,
   });
 
-  final String label;
-  final double value;
-  final ValueChanged<double> onChanged;
+  final AccessibilityCriterion criterion;
+  final AccessibilityRating rating;
+  final ValueChanged<AccessibilityRating> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(child: Text(label, style: AppTypography.titleMedium)),
-              Text('${value.round()}/10', style: AppTypography.titleMedium),
+    final value = rating.value ?? 3;
+    return Card(
+      margin: const EdgeInsets.only(bottom: AppSpacing.md),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(criterion.label, style: AppTypography.titleMedium),
+            const SizedBox(height: AppSpacing.sm),
+            SegmentedButton<AccessibilityRatingStatus>(
+              segments: const [
+                ButtonSegment(
+                  value: AccessibilityRatingStatus.rated,
+                  label: Text('Rate'),
+                ),
+                ButtonSegment(
+                  value: AccessibilityRatingStatus.unknown,
+                  label: Text('Unknown'),
+                ),
+                ButtonSegment(
+                  value: AccessibilityRatingStatus.notApplicable,
+                  label: Text('N/A'),
+                ),
+              ],
+              selected: {rating.status},
+              onSelectionChanged: (selection) {
+                final status = selection.first;
+                onChanged(switch (status) {
+                  AccessibilityRatingStatus.rated => AccessibilityRating.rated(
+                    value,
+                  ),
+                  AccessibilityRatingStatus.unknown =>
+                    const AccessibilityRating.unknown(),
+                  AccessibilityRatingStatus.notApplicable =>
+                    const AccessibilityRating.notApplicable(),
+                });
+              },
+            ),
+            if (rating.status == AccessibilityRatingStatus.rated) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Row(
+                children: [
+                  Expanded(
+                    child: Slider(
+                      min: 0,
+                      max: 5,
+                      divisions: 5,
+                      value: value,
+                      label: value.round().toString(),
+                      onChanged: (next) =>
+                          onChanged(AccessibilityRating.rated(next)),
+                    ),
+                  ),
+                  Text('${value.round()}/5'),
+                ],
+              ),
             ],
-          ),
-          Slider(
-            min: 1,
-            max: 10,
-            divisions: 9,
-            value: value,
-            label: value.round().toString(),
-            onChanged: onChanged,
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

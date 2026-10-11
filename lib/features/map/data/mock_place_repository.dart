@@ -9,26 +9,9 @@ import 'package:access_map/shared/models/accessibility_feature.dart';
 import 'package:access_map/shared/models/place_review.dart';
 import 'package:access_map/shared/models/accessibility_need.dart';
 import 'package:access_map/shared/models/travel_mode.dart';
+import 'package:access_map/features/map/domain/place_repository.dart';
 
-/// Abstract place repository — mock now, API later. A future
-/// ApiPlaceRepository can implement the same surface without UI changes.
-abstract class PlaceRepository {
-  Future<List<Place>> getNearbyPlaces(double lat, double lng, {double radiusKm = 10});
-  Future<List<Place>> searchPlaces(String query);
-  Future<Place?> getPlaceById(String id);
-  Future<List<Place>> getPlacesByCategory(PlaceCategory category);
-  Future<void> addReview(String placeId, PlaceReview review);
-
-  /// Adds a community-contributed place. Returns the stored place.
-  Future<Place> addPlace(Place place);
-
-  /// Updates an existing place (community places are persisted).
-  Future<void> updatePlace(Place place);
-
-  /// Nearest existing place to the given point within [radiusKm],
-  /// or null when nothing is close enough (duplicate detection).
-  Future<Place?> findNearbyPlace(double lat, double lng, {double radiusKm = 0.15});
-}
+export 'package:access_map/features/map/domain/place_repository.dart';
 
 /// Persists community-created places locally so they survive app restarts.
 /// SharedPreferences is sufficient for the MVP — no heavyweight DB needed.
